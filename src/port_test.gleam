@@ -11,7 +11,7 @@ pub fn main() {
 
   let assert Ok(_) =
     fn(_req: Request(Connection)) -> Response(ResponseData) {
-      io.println("A response came in")
+      io.println("A request came in")
       response.new(200)
       |> response.set_body(mist.Bytes(bytes_tree.from_string("Hello world")))
     }
