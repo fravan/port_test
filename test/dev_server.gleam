@@ -1,129 +1,57 @@
-import gleam/bit_array
-import gleam/dynamic
-import gleam/dynamic/decode
-import gleam/erlang
-import gleam/erlang/charlist
-import gleam/erlang/port.{type Port}
 import gleam/erlang/process
-import gleam/function
+import gleam/int
 import gleam/io
 import gleam/list
-import gleam/result
-import gleam/string
+import port_test
+import shellout
 
-@external(erlang, "port_test_ffi", "open_port_test")
-fn open_port(args: List(String)) -> Port
+// From gleam-radiate
+type Module
 
-@external(erlang, "port_test_ffi", "close_port_test")
-fn close_port(port: Port) -> Bool
+type What
 
-@external(erlang, "port_test_ffi", "kill_port_test")
-fn kill_port(port: Port) -> Bool
+@external(erlang, "code", "modified_modules")
+fn modified_modules() -> List(Module)
 
-fn get_ebin(folder_name: String) -> String {
-  "-pa /var/home/bazzite/Dev/port_test/build/dev/erlang/"
-  <> folder_name
-  <> "/ebin"
-}
+@external(erlang, "code", "purge")
+fn purge(module: Module) -> Bool
 
-fn get_args() {
-  [
-    get_ebin("gleam_version"),
-    get_ebin("gleam_stdlib"),
-    get_ebin("gleam_crypto"),
-    get_ebin("gleam_erlang"),
-    get_ebin("gleam_http"),
-    get_ebin("gleam_otp"),
-    get_ebin("gleam_yielder"),
-    get_ebin("gleeunit"),
-    get_ebin("glisten"),
-    get_ebin("gramps"),
-    get_ebin("hpack"),
-    get_ebin("logging"),
-    get_ebin("mist"),
-    get_ebin("port_test"),
-    get_ebin("telemetry"),
-    "-eval port_test@@main:run(port_test)",
-    "-noshell",
-  ]
-}
-
-fn get_cmd() {
-  let args = get_args()
-  list.fold(args, "erl", fn(cmd, arg) { cmd <> " " <> arg })
-}
+@external(erlang, "code", "atomic_load")
+fn atomic_load(modules: List(Module)) -> Result(Nil, List(#(Module, What)))
 
 pub fn main() {
-  // io.println(get_cmd())
-  open_server()
-}
+  let pid = process.start(port_test.main, False)
+  process.sleep(10_000)
 
-type PortMessages {
-  Data(String)
-  Unknown(#(dynamic.Dynamic, List(decode.DecodeError)))
-}
+  io.println("Building new gleam")
+  let build_result =
+    shellout.command(run: "gleam", with: ["build"], in: ".", opt: [])
+  case build_result {
+    Ok(output) -> {
+      io.println("Output of gleam build is the following:")
+      io.debug(output)
 
-fn open_server() {
-  io.println("Opening port…")
-  let port = open_port(get_args())
-  io.debug(port)
-  let selector =
-    process.new_selector()
-    |> process.selecting_anything(fn(msg) {
-      let decoder = {
-        use message <- decode.subfield(
-          [1, 1],
-          decode.new_primitive_decoder("Data", fn(dyn) {
-            decode.run(
-              dyn,
-              decode.list(decode.int)
-                |> decode.map(fn(a) {
-                  string.from_utf_codepoints(
-                    list.map(a, string.utf_codepoint) |> result.values,
-                  )
-                }),
-            )
-            |> result.map_error(fn(_) { "Failed" })
-          }),
-        )
-        // decode.list(decode.int))
-        decode.success(message)
-      }
-      case decode.run(msg, decoder) {
-        Ok(d) -> {
-          // let assert Ok(d) = bit_array.to_string(bit)
-          Data(d)
-        }
-        // Ok(Ok(decoded)) -> Data(decoded)
-        // Ok(Error(Nil)) -> Data("lost")
-        Error(err) -> Unknown(#(msg, err))
-      }
-    })
-
-  listen_to_port_messages(selector)
-  process.sleep(500)
-  io.println("Closing port…")
-  let result = close_port(port)
-  io.debug(result)
-  io.println("Killing port…")
-  kill_port(port)
-  io.println("Everything down, shutting down…")
-}
-
-fn listen_to_port_messages(selector) {
-  case process.select(selector, 5000) {
-    Ok(Data(message)) -> {
-      io.println("From server:")
-      io.debug(message)
-      listen_to_port_messages(selector)
+      let mods = modified_modules()
+      io.println("Modified modules:")
+      io.debug(mods)
+      list.each(mods, purge)
+      let load = atomic_load(mods)
+      io.println("Atomic load:")
+      let _ = io.debug(load)
+      Nil
     }
-    Ok(Unknown(errors)) -> {
-      io.println("From server, unknown:")
-      io.debug(errors)
-      listen_to_port_messages(selector)
-    }
-    Error(_) -> {
-      io.println("The process got nothing back")
+    Error(#(status, message)) -> {
+      io.println_error(message)
+      io.println_error(int.to_string(status))
+      Nil
     }
   }
+
+  io.println("New build in prod, killing current pid")
+  io.debug(pid)
+  process.kill(pid)
+  io.println("Starting new one")
+  let new_pid = process.start(port_test.main, False)
+  io.debug(new_pid)
+  process.sleep_forever()
 }
