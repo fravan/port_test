@@ -9,7 +9,7 @@ import mist.{type Connection, type ResponseData}
 pub fn main() {
   io.println("Launching new mist server on localhost:3000")
 
-  let assert Ok(_) =
+  let assert Ok(mist_subject) =
     fn(_req: Request(Connection)) -> Response(ResponseData) {
       io.println("A request came in")
       response.new(200)
@@ -19,10 +19,13 @@ pub fn main() {
     |> mist.port(3000)
     |> mist.start_http
 
-  listen(
-    process.new_selector()
-    |> process.selecting_anything(function.identity),
-  )
+  let mist_pid = process.subject_owner(mist_subject)
+  io.debug(process.self())
+  io.debug(mist_pid)
+  let got_linked = process.link(mist_pid)
+  io.debug(got_linked)
+
+  process.sleep_forever()
 }
 
 fn listen(selector) {
